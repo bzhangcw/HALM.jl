@@ -6,9 +6,13 @@
 ####                                                    ####
 #### Q: n x n PD matrix, c: n-vector, A: d x n matrix   ####    
 ############################################################
+using Gurobi
+using JuMP
 using LinearAlgebra
 using Random
 using SparseArrays
+const GRB_ENV = Gurobi.Env()
+
 
 Random.seed!(123)
 
