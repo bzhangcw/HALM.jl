@@ -243,12 +243,3 @@ plt = plot(
 display(plt)
 savefig(plt, "fig/cvx_logexp_double_fixedrho.png")
 
-
-# Solved by Gurobi
-model = Model(() -> Gurobi.Optimizer(GRB_ENV))
-set_attribute(model, "OutputFlag", 0)
-@variable(model, var[1:n])
-@constraint(model, A * var .== b)
-@objective(model, Min, log(exp(sum([x[i] * x[i+1] for i in 1:n-1]) - 1) + 1) + log(exp(1 - sum([x[i] * x[i+1] for i in 1:n-1])) + 1))
-optimize!(model)
-println("Gurobi: optimal value = ", objective_value(model))
