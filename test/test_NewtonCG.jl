@@ -68,7 +68,7 @@ if bool_opt
             )            
 
             # Use capped CG to find the Newton step
-            cgtime = @elapsed d = search_direction(opt_inner::NewtonCG, x, _ϕ, hvp₊; rtol=ε_CG)
+            cgtime = @elapsed d = search_direction(opt_inner, x, _ϕ, hvp₊; rtol=ε_CG)
             push!(cgtimes_k, cgtime)
 
             # Line search
