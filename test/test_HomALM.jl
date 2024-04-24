@@ -1,174 +1,122 @@
-using JuMP, Gurobi
-const GRB_ENV = Gurobi.Env()
+using DrWatson
+@quickactivate "."
+using Gurobi
+using JuMP
+using KrylovKit
+using LinearAlgebra
+using Plots
+using Printf
+using Statistics
 
-include("test_utils.jl")
+include(srcdir("linearsearch.jl"))
+include(srcdir("innersolve.jl"))
 
-"""
-Consider the linearly constrained minimization problem
-      min  f(x)
-      s.t. Ax = b
-Use augmented Lagrangian method and homogenized variant to solve the problem.
-"""
+bool_setup = true
+bool_opt = true
+bool_gurobi = true
 
-
-"""
-Example 1:
-
-    minimize f(x) = x₁² + x₂² subject to x₁ + x₂ = 1.
-
-The augmented Lagrangian function is
-
-      L(x, y) = x₁² + x₂² + y(x₁ + x₂ - 1) + ρ/2 * ||x₁ + x₂ - 1||²
-
-"""
-f(x) = sum(x.^2)
-H(x) = I
-g(x) = [2*x[1]; 2*x[2]]
-A = [1.0 1.0]
-b = [1.0]
-Prob = LinearConstrProblem(f, H, g, A, b)
-
-# Define JuMP ALM subproblem model with expression for f(x)
-subprob_model = Model(() -> Gurobi.Optimizer(GRB_ENV))
-set_attribute(subprob_model, "OutputFlag", 0)
-@variable(subprob_model, var_x[1:2])
-fex = @expression(subprob_model, var_x[1]^2 + var_x[2]^2) # Expression for f(x)
-
-# Define JuMP model for original problem (to be solved by Gurobi)
-model = Model(() -> Gurobi.Optimizer(GRB_ENV))
-set_attribute(model, "OutputFlag", 0)
-@variable(model, var[1:2])
-@constraint(model, A * var .== b)
-@objective(model, Min, var[1]^2 + var[2]^2)
-
-## Initial point and penalty parameter for ALM
-x0 = [0.0, 0.0]
-y0 = [0.0]
-ρ = 1.0
-gif = test_fun(Prob, x0, y0, ρ, model, subprob_model, fex; run_ALM=false)
+if bool_setup
+    # Set up the problem
+    include("problems/prob_regls.jl")
+end
 
 
-"""
-Example 2:
-
-    minimize f(x) = 2x₁² + x₂² subject to x₁ + x₂ = 1.
-
-The augmented Lagrangian function is
-
-      L(x, y) = 2x₁² + x₂² + y(x₁ + x₂ - 1) + ρ/2 * ||x₁ + x₂ - 1||²
-
-"""
-f(x) = x[1]^2 + 2 * x[2]^2
-H(x) = [1.0 0.0; 0.0 2.0]
-g(x) = [2*x[1]; 4*x[2]]
-A = [1.0 1.0]
-b = [1.0]
-Prob = LinearConstrProblem(f, H, g, A, b)
-
-# Define JuMP ALM subproblem model with expression for f(x)
-subprob_model = Model(() -> Gurobi.Optimizer(GRB_ENV))
-set_attribute(subprob_model, "OutputFlag", 0)
-@variable(subprob_model, var_x[1:2])
-fex = @expression(subprob_model, var_x[1]^2 + 2 * var_x[2]^2) # Expression for f(x)
-
-# Define JuMP model for original problem (to be solved by Gurobi)
-model = Model(() -> Gurobi.Optimizer(GRB_ENV))
-set_attribute(model, "OutputFlag", 0)
-@variable(model, var[1:2])
-@constraint(model, A * var .== b)
-@objective(model, Min, var[1]^2 + 2 * var[2]^2)
-
-## Initial point and penalty parameter for ALM
-x0 = [0.0, 0.0]
-y0 = [0.0]
-ρ = 1.0
-gif = test_fun(Prob, x0, y0, ρ, model, subprob_model, fex; run_ALM=false)
+ε = 1e-4
+ϵₕ = 1e-7
+opt_ls = backtrack()
 
 
-"""
-Example 3:
+r_hist, loss_hist = [], []
+cgtimes_hist = []
+push!(r_hist, r(x₀))
+push!(loss_hist, loss(x₀))
 
-    minimize f(x) = -x₁² + x₂² subject to x₁ + x₂ = 1.
+if bool_opt
+    # Homogeneous ALM
+    K = 25
+    J = 10
+    x = copy(x₀)
+    y = copy(y₀)
+    ρ = 1.0
+    kₜ = 0
+    for k in 1:K
+        global x, y, ρ, ξ, d, θ, V, kₜ
+        L(x) = loss(x) + y' * r(x) + ρ / 2 * (r(x)' * r(x))
+        ϕ(x) = grad(x) + A' * (y + ρ * r(x))
+        hvp₊(x, v) = hess(x) * v + ρ * A' * (A * v)
+        δ = 0
+        for j in 1:J
+            # fix y, ρ, optimize
+            _f = loss(x)
+            _r = r(x)
+            _p = _r' * _r
+            _L = _f + y' * _r + ρ / 2 * _p
+            _ϕ = ϕ(x)
+            γ = 0.1
 
-The augmented Lagrangian function is
+            @printf(
+                "---- k:%3d, j:%3d, ρ:%.1e, |r|²:%.1e, f:%.2f, L₊:%.2f\n",
+                k, j, ρ, _p, _f, _L
+            )
+            failed_count = 0
+            while failed_count < 10
+                δ = _p * ρ * γ - _L * 1e-3 * (1 - γ)
+                if _ϕ |> norm < ε
+                    break
+                end
 
-      L(x, y) = -x₁² + x₂² + y(x₁ + x₂ - 1) + ρ/2 * ||x₁ + x₂ - 1||²
+                fvp(v) = [
+                    hvp₊(x, v[1:end-1]) + ϕ(x) * v[end];
+                    ϕ(x)' * v[1:end-1] + δ * v[end]
+                ]
 
-"""
-f(x) = -x[1]^2 + 2 * x[2]^2
-H(x) = [-1.0 0.0; 0.0 2.0]
-g(x) = [-2*x[1]; 4*x[2]]
-A = [1.0 1.0]
-b = [1.0]
-Prob = LinearConstrProblem(f, H, g, A, b)
+                # compute eigenvalue from KrylovKit
+                D, V, info = KrylovKit.eigsolve(
+                    fvp, n + 1, 1, :SR, Float64;
+                    tol=ϵₕ,
+                    issymmetric=true, eager=true
+                )
+                ξ = V[1]
+                d = ξ[1:end-1] ./ ξ[end]
+                θ = -D[1]
+                @printf(
+                    "   |---- |d|:%.1e, |ϕ|:%.1e, θ:%.1e, δ:%+.1e \n",
+                    d |> norm, _ϕ |> norm, θ, δ
+                )
+                kₜ += 1
+                if θ < 0
+                    γ /= 20
+                    fail_count += 1
+                    continue
+                end
+                break
+            end
 
-# Define JuMP ALM subproblem model with expression for f(x)
-subprob_model = Model(() -> Gurobi.Optimizer(GRB_ENV))
-set_attribute(subprob_model, "OutputFlag", 0)
-@variable(subprob_model, var_x[1:2])
-fex = @expression(subprob_model, -var_x[1]^2 + 2 * var_x[2]^2) # Expression for f(x)
+            # Line search
+            α, kₗ = linearsearch(opt_ls, L, x, d, _L)
 
-# Define JuMP model for original problem (to be solved by Gurobi)
-model = Model(() -> Gurobi.Optimizer(GRB_ENV))
-set_attribute(model, "OutputFlag", 0)
-@variable(model, var[1:2])
-@constraint(model, A * var .== b)
-@objective(model, Min, -var[1]^2 + 2 * var[2]^2)
+            @printf(
+                "   |---- kₜ:%4d, kₗ:%2d, α:%.1e,\n",
+                kₜ, kₗ, α
+            )
+            x += α * d
+            if α < 1e-4
+                break
+            end
+        end
+        push!(r_hist, r(x))
+        push!(loss_hist, loss(x))
+        if (norm(r(x)) < ε) || (abs(L(x) - loss(x)) < 1e-3)
+            @info "terminated by residual"
+            break
+        end
+        y += ρ * r(x)
+        ρ *= 2
+    end
+end
 
-## Initial point and penalty parameter for ALM
-x0 = [0.0, 0.0]
-y0 = [0.0]
-ρ = 1.0
-gif = test_fun(Prob, x0, y0, ρ, model, subprob_model, fex; run_ALM=false)
-
-
-"""
-Example 4:
-
-    minimize      f(x) = 1/2 * ||Wx - w||² + μ/2 * ||x||² 
-    subject to    A * x = b
-
-"""
-# Define the problem data
-Random.seed!(2)
-n = 150
-m = 100
-d = 20 # number constraints
-μ = 1e-1
-# linear pieces
-W = sprand(Float64, m, n, 0.3)
-w = rand(Float64, m) * 2 .- 1
-# constraints
-A = sprand(Float64, d, n, 0.2)
-b = A * rand(Float64, n)
-
-f(x) = 0.5 * norm(W * x - w)^2 + 0.5 * μ * norm(x)^2
-g(x) = W' * (W * x - w) + μ * x
-H(x) = Symmetric(W' * W + μ * I)
-hvp(x, v) = W' * (W * v) + μ * v
-r(x) = A * x - b
-Prob = LinearConstrProblem(f, H, g, A, b)
-
-
-# Define JuMP model for original problem (to be solved by Gurobi)
-model = Model(() -> Gurobi.Optimizer(GRB_ENV))
-set_attribute(model, "OutputFlag", 0)
-@variable(model, var[1:n])
-@constraint(model, A * var .== b)
-@objective(model, Min, 0.5 * sum((W * var - w).^2) + 0.5 * μ * sum(var.^2))
-optimize!(model)
-println("Gurobi: optimal value = ", objective_value(model))
-
-
-x0 = ones(n) / 10
-y0 = ones(d) / 10
-
-x, iter, x_history, L_history = HomALM(Prob, x0, y0, ρ; tol=1e-4, max_iter=40000)
-
-# Plot the residuals of the iterates and the objective value
-plt_x_history = reduce(hcat, x_history)
-plt_res = [norm(r(plt_x_history[:, i])) for i in 1:iter+1]
-plt_obj = [f(plt_x_history[:, i]) for i in 1:iter+1]
-
-scatter(plt_res[end-5000:end], label = "Residuals", xlabel = "Iteration", ylabel = "Residual", title = "Residuals of HomALM")
-scatter(plt_obj[end-5000:end], label = "Objective value", xlabel = "Iteration", ylabel = "Objective value", title = "Objective value of HomALM")
+# Compare with Gurobi
+if bool_gurobi
+    println("Gurobi: optimal value = ", objective_value(model))
+    @printf("Difference of optimal values = %.2e\n", objective_value(model) - loss(x) |> abs)
+end
