@@ -86,7 +86,7 @@ if bool_opt
                 kₜ += 1
                 if θ < 0
                     γ /= 20
-                    fail_count += 1
+                    failed_count += 1
                     continue
                 end
                 break
