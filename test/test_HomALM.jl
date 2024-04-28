@@ -3,6 +3,7 @@ using DrWatson
 using Gurobi
 using JuMP
 using KrylovKit
+using LaTeXStrings
 using LinearAlgebra
 using Plots
 using Printf
@@ -13,11 +14,13 @@ include(srcdir("innersolve.jl"))
 
 bool_setup = true
 bool_opt = true
-bool_gurobi = true
+bool_gurobi = false
+bool_plot = true
 
 if bool_setup
-    # Set up the problem
-    include("problems/prob_regls.jl")
+    # Set up the problem: define loss(), grad(), hess(), hvp(), r(), x₀, y₀
+    probname = "noncvxqp"
+    include("problems/prob_" * probname * ".jl")
 end
 
 
@@ -27,9 +30,14 @@ opt_ls = backtrack()
 
 
 r_hist, loss_hist = [], []
+lanczostimes_hist = []
 cgtimes_hist = []
 push!(r_hist, r(x₀))
 push!(loss_hist, loss(x₀))
+
+condnums_hessL = []
+condnums_F = []
+ρs = []
 
 if bool_opt
     # Homogeneous ALM
@@ -45,6 +53,8 @@ if bool_opt
         ϕ(x) = grad(x) + A' * (y + ρ * r(x))
         hvp₊(x, v) = hess(x) * v + ρ * A' * (A * v)
         δ = 0
+        lanczostimes_k = []
+        cgtimes_k = []
         for j in 1:J
             # fix y, ρ, optimize
             _f = loss(x)
@@ -71,14 +81,16 @@ if bool_opt
                 ]
 
                 # compute eigenvalue from KrylovKit
-                D, V, info = KrylovKit.eigsolve(
-                    fvp, n + 1, 1, :SR, Float64;
-                    tol=ϵₕ,
-                    issymmetric=true, eager=true
-                )
-                ξ = V[1]
-                d = ξ[1:end-1] ./ ξ[end]
-                θ = -D[1]
+                lanczos_time = @elapsed begin
+                    D, V, info = KrylovKit.eigsolve(
+                        fvp, n + 1, 1, :SR, Float64;
+                        tol=ϵₕ,
+                        issymmetric=true, eager=true
+                    )
+                    ξ = V[1]
+                    d = ξ[1:end-1] ./ ξ[end]
+                    θ = -D[1]
+                end
                 @printf(
                     "   |---- |d|:%.1e, |ϕ|:%.1e, θ:%.1e, δ:%+.1e \n",
                     d |> norm, _ϕ |> norm, θ, δ
@@ -89,7 +101,26 @@ if bool_opt
                     failed_count += 1
                     continue
                 end
+                # Keep the Lanczos time accepted θ
+                push!(lanczostimes_k, lanczos_time)
                 break
+            end
+
+            if bool_plot
+                cgtime = @elapsed begin
+                    d, _ = KrylovKit.linsolve(
+                        (v -> hvp₊(x, v)), -ϕ(x), zeros(n), rtol=1e-5, issymmetric=true
+                    )
+                end
+                push!(cgtimes_k, cgtime)
+
+                hessL(x) = hess(x) + ρ * A' * A
+                F(x) = [hessL(x) _ϕ; _ϕ' δ]
+                push!(ρs, ρ)
+                push!(condnums_hessL, cond(Matrix(hessL(x)), 2))
+                eig_F = eigen(Matrix(F(x)))
+                cond_F = (eig_F.values[end] - eig_F.values[end-1]) / (eig_F.values[end] - eig_F.values[1])
+                push!(condnums_F, cond_F)
             end
 
             # Line search
@@ -106,6 +137,8 @@ if bool_opt
         end
         push!(r_hist, r(x))
         push!(loss_hist, loss(x))
+        push!(lanczostimes_hist, lanczostimes_k)
+        push!(cgtimes_hist, cgtimes_k)
         if (norm(r(x)) < ε) || (abs(L(x) - loss(x)) < 1e-3)
             @info "terminated by residual"
             break
@@ -119,4 +152,14 @@ end
 if bool_gurobi
     println("Gurobi: optimal value = ", objective_value(model))
     @printf("Difference of optimal values = %.2e\n", objective_value(model) - loss(x) |> abs)
+end
+
+if bool_plot
+    plot(ρs, condnums_hessL, label=L"κ(∇^2L)", xlabel="ρ", ylabel="condition number", title="Condition numbers", lw=2)
+    plot!(ρs, condnums_F, label=L"κ(F)", lw=2)
+    savefig("figs/" * probname * "_condnum.png")
+
+    plot(mean.(lanczostimes_hist), label="Lanczos time", xlabel="iter", ylabel="time (s)", title="Time", lw=2)
+    plot!(mean.(cgtimes_hist), label="CG time", lw=2)
+    savefig("figs/" * probname * "_time.png")
 end

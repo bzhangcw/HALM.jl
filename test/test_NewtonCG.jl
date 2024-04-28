@@ -16,8 +16,9 @@ bool_opt = true
 bool_gurobi = true
 
 if bool_setup
-    # Set up the problem
-    include("problems/prob_fastdecayqp.jl")
+    # Set up the problem: define loss(), grad(), hess(), hvp(), r(), x₀, y₀
+    probname = "regls"
+    include("problems/prob_" * probname * ".jl")
 end
 
 
