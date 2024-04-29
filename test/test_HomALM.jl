@@ -15,7 +15,7 @@ include(srcdir("innersolve.jl"))
 bool_setup = true
 bool_opt = true
 bool_gurobi = false
-bool_plot = true
+bool_plot = false
 
 if bool_setup
     # Set up the problem: define loss(), grad(), hess(), hvp(), r(), x₀, y₀

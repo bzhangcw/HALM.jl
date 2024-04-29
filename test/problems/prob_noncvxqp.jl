@@ -26,8 +26,8 @@ U = @views VU[:, (n-d+1):n]
 
 # Take A as Uᵀ and generate b
 A = U'
-x₀ = U * randn(T, d)
-b = A * x₀
+xsol = U * randn(T, d)
+b = A * xsol
 
 # Generate Q
 D₁ = Diagonal(rand(T, n-d)) # positive diagonal
@@ -50,6 +50,18 @@ x₀ = ones(T, n) / 10
 y₀ = ones(T, d) / 10
 
 # Analytical optimal solution
-u_opt = D₁ \ (-V' * (Q * x₀ + c))
-fx₀ = 0.5 * x₀' * Q * x₀ + c' * x₀
-opt = fx₀ + 0.5 * u_opt' * D₁ * u_opt + (Q * x₀ + c)' * (V * u_opt)
+u_opt = D₁ \ (-V' * (Q * xsol + c))
+fxsol = 0.5 * xsol' * Q * xsol + c' * xsol
+opt = fxsol + 0.5 * u_opt' * D₁ * u_opt + (Q * x₀ + c)' * (V * u_opt)
+
+
+# Set up Gurobi model
+if bool_gurobi
+    model = Model(() -> Gurobi.Optimizer(GRB_ENV))
+    set_attribute(model, "OutputFlag", 1)
+    set_attribute(model, "TimeLimit", 3)
+    @variable(model, varx[1:n])
+    @constraint(model, A * varx .== b)
+    @objective(model, Min, 0.5 * varx' * Q * varx + c' * varx)
+    optimize!(model)
+end
