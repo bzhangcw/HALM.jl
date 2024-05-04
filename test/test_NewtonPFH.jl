@@ -1,3 +1,10 @@
+############################################################
+# We use the same structure as in test_NewtonCG
+#   but we substitute loop j by 
+#   the Path-Following Homogeneous method (PFH) 
+#   as the subproblem solver.
+#   we can directly use DRSOM as a black
+############################################################
 using DrWatson
 @quickactivate "."
 using Gurobi
@@ -7,13 +14,14 @@ using LinearAlgebra
 using Plots
 using Printf
 using Statistics
+using DRSOM
 
 include(srcdir("linearsearch.jl"))
 include(srcdir("innersolve.jl"))
 
 bool_setup = true
 bool_opt = true
-bool_gurobi = false
+bool_gurobi = true
 
 if bool_setup
     # Set up the problem: define loss(), grad(), hess(), hvp(), r(), x₀, y₀
@@ -39,11 +47,13 @@ if bool_opt
     x = copy(x₀)
     y = copy(y₀)
     ρ = 1.0
+    Hv = similar(x)
     for k in 1:K
         global x, y, ρ, ξ, d, θ, V, kₜ
         L(x) = loss(x) + y' * r(x) + ρ / 2 * (r(x)' * r(x))
         ϕ(x) = grad(x) + A' * (y + ρ * r(x))
-        hvp₊(x, v) = hvp(x, v) + ρ * A' * (A * v)
+        # hvp₊(x, v) = hvp(x, v) + ρ * A' * (A * v)
+        hvp₊(x, v, Hv) = copyto!(Hv, hvp(x, v) + ρ * A' * (A * v))
 
         _f = loss(x)
         _r = r(x)
@@ -56,34 +66,17 @@ if bool_opt
 
         cgtimes_k = Vector{Float64}()
         # Newton-CG loop: fix y, ρ, optimize
-        for j in 1:J
-            _f = loss(x)
-            _r = r(x)
-            _p = _r' * _r
-            _L = _f + y' * _r + ρ / 2 * _p
-            _ϕ = ϕ(x)
-
-            @printf(
-                "   |---- j:%3d, |r|²:%.1e, f:%.2f, L₊:%.2f, |_ϕ|:%.2e, kkt:%.1e\n",
-                j, _p, _f, _L, _ϕ |> norm, kkt(x, y) |> norm
-            )
-
-            # Use capped CG to find the Newton step
-            cgtime = @elapsed d = search_direction(opt_inner, x, _ϕ, hvp₊; rtol=ε_CG)
-            push!(cgtimes_k, cgtime)
-
-            # Line search
-            α, kₗ = linearsearch(opt_ls, L, x, d, _L)
-
-            @printf(
-                "kₗ:%2d, α:%.1e,\n",
-                kₗ, α
-            )
-            x += α * d
-            if α < 1e-6
-                break
-            end
-        end
+        # todo, use PFHIteration instead later
+        rh = PFH(name=Symbol("PF-HSODM"))(;
+            x0=copy(x), f=L, g=ϕ, hvp=hvp₊,
+            maxiter=10, tol=ε, freq=1,
+            step=:hsodm, μ₀=5e-2,
+            bool_trace=true,
+            verbose=0,
+            direction=:warm,
+            maxtime=500,
+        )
+        x = rh.state.x
         push!(r_hist, r(x))
         push!(loss_hist, loss(x))
         push!(cgtimes_hist, cgtimes_k)

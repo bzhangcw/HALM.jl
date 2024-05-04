@@ -14,18 +14,18 @@ include(srcdir("innersolve.jl"))
 
 bool_setup = true
 bool_opt = true
-bool_gurobi = false
+bool_gurobi = true
 bool_plot = false
 
 if bool_setup
     # Set up the problem: define loss(), grad(), hess(), hvp(), r(), x₀, y₀
-    probname = "noncvxqp"
+    probname = "regls"
     include("problems/prob_" * probname * ".jl")
 end
 
 
 ε = 1e-4
-ϵₕ = 1e-7
+ϵₕ = 1e-8
 opt_ls = backtrack()
 
 
@@ -51,7 +51,7 @@ if bool_opt
         global x, y, ρ, ξ, d, θ, V, kₜ
         L(x) = loss(x) + y' * r(x) + ρ / 2 * (r(x)' * r(x))
         ϕ(x) = grad(x) + A' * (y + ρ * r(x))
-        hvp₊(x, v) = hess(x) * v + ρ * A' * (A * v)
+        hvp₊(x, v) = hvp(x, v) + ρ * A' * (A * v)
         δ = 0
         lanczostimes_k = []
         cgtimes_k = []
@@ -69,8 +69,22 @@ if bool_opt
                 k, j, ρ, _p, _f, _L
             )
             failed_count = 0
+            δᵤ = _p * ρ
+
             while failed_count < 10
-                δ = _p * ρ * γ - _L * 1e-3 * (1 - γ)
+
+                if _p / norm(_ϕ) >= 1e-1
+                    # large primal infeasibility 
+                    δ = _p * ρ * γ - (_f + y' * _r) * (1 - γ)
+                else
+                    if _p > ε # still large primal infeasibility
+                        γ /= 20
+                    else
+                        denom = (1 + norm(d)^2)
+                        ∂θ = -1 / denom
+                        δ += θ * denom
+                    end
+                end
                 if _ϕ |> norm < ε
                     break
                 end
@@ -106,22 +120,22 @@ if bool_opt
                 break
             end
 
-            if bool_plot
-                cgtime = @elapsed begin
-                    d, _ = KrylovKit.linsolve(
-                        (v -> hvp₊(x, v)), -ϕ(x), zeros(n), rtol=1e-5, issymmetric=true
-                    )
-                end
-                push!(cgtimes_k, cgtime)
+            # if bool_plot
+            #     cgtime = @elapsed begin
+            #         d, _ = KrylovKit.linsolve(
+            #             (v -> hvp₊(x, v)), -ϕ(x), zeros(n), rtol=1e-5, issymmetric=true
+            #         )
+            #     end
+            #     push!(cgtimes_k, cgtime)
 
-                hessL(x) = hess(x) + ρ * A' * A
-                F(x) = [hessL(x) _ϕ; _ϕ' δ]
-                push!(ρs, ρ)
-                push!(condnums_hessL, cond(Matrix(hessL(x)), 2))
-                eig_F = eigen(Matrix(F(x)))
-                cond_F = (eig_F.values[end] - eig_F.values[end-1]) / (eig_F.values[end] - eig_F.values[1])
-                push!(condnums_F, cond_F)
-            end
+            #     hessL(x) = hess(x) + ρ * A' * A
+            #     F(x) = [hessL(x) _ϕ; _ϕ' δ]
+            #     push!(ρs, ρ)
+            #     push!(condnums_hessL, cond(Matrix(hessL(x)), 2))
+            #     eig_F = eigen(Matrix(F(x)))
+            #     cond_F = (eig_F.values[end] - eig_F.values[end-1]) / (eig_F.values[end] - eig_F.values[1])
+            #     push!(condnums_F, cond_F)
+            # end
 
             # Line search
             α, kₗ = linearsearch(opt_ls, L, x, d, _L)
@@ -144,7 +158,7 @@ if bool_opt
             break
         end
         y += ρ * r(x)
-        ρ *= 2
+        (ρ *= 2)
     end
 end
 
