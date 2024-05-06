@@ -10,7 +10,7 @@ using DrWatson
 using Gurobi
 using JuMP
 using KrylovKit
-using LinearAlgebra
+using LinearAlgebra, LaTeXStrings
 using Plots
 using Printf
 using Statistics
@@ -22,6 +22,7 @@ include(srcdir("innersolve.jl"))
 bool_setup = true
 bool_opt = true
 bool_gurobi = true
+bool_plot = true
 
 if bool_setup
     # Set up the problem: define loss(), grad(), hess(), hvp(), r(), x₀, y₀
@@ -37,6 +38,11 @@ opt_inner = NewtonCG()
 
 r_hist, loss_hist = [], []
 cgtimes_hist = []
+
+condnums_hessL = []
+condnums_F = []
+ρs = []
+
 push!(r_hist, r(x₀))
 push!(loss_hist, loss(x₀))
 
@@ -48,8 +54,9 @@ if bool_opt
     y = copy(y₀)
     ρ = 1.0
     Hv = similar(x)
+    j = 0
     for k in 1:K
-        global x, y, ρ, ξ, d, θ, V, kₜ
+        global x, y, ρ, ξ, d, θ, V, kₜ, j
         L(x) = loss(x) + y' * r(x) + ρ / 2 * (r(x)' * r(x))
         ϕ(x) = grad(x) + A' * (y + ρ * r(x))
         # hvp₊(x, v) = hvp(x, v) + ρ * A' * (A * v)
@@ -60,8 +67,8 @@ if bool_opt
         _p = _r' * _r
 
         @printf(
-            "---- k:%3d, ρ:%.1e, |r|²:%.1e, f:%.2f\n",
-            k, ρ, _p, _f
+            "---- k:%3d, j:%3d, ρ:%.1e, |r|²:%.1e, f:%.2f\n",
+            k, j, ρ, _p, _f
         )
 
         cgtimes_k = Vector{Float64}()
@@ -76,6 +83,19 @@ if bool_opt
             direction=:warm,
             maxtime=500,
         )
+
+        if bool_plot
+            hessL(x) = hess(x) + ρ * A' * A
+            # homotopy matrix
+            F(x) = [hessL(x) ϕ(x); ϕ(x)' 0]
+            push!(ρs, ρ)
+            push!(condnums_hessL, cond(Matrix(hessL(x)), 2))
+            eig_F = eigen(Matrix(F(x)))
+            cond_F = (eig_F.values[end] - eig_F.values[end-1]) / (eig_F.values[end] - eig_F.values[1])
+            push!(condnums_F, cond_F)
+        end
+
+        j += rh.state.kᵤ
         x = rh.state.x
         push!(r_hist, r(x))
         push!(loss_hist, loss(x))
@@ -96,5 +116,8 @@ if bool_gurobi
     @printf("KKT values = %.2e: %.2e\n", kkt(value.(varx), -dual.(consy)) |> norm, kkt(x, y) |> norm)
 end
 
-
-plot(mean.(cgtimes_hist), label="Newton-CG")
+if bool_plot
+    plot(ρs, condnums_hessL, label=L"κ(∇^2L)", xlabel="ρ", ylabel="condition number", title="Condition numbers", lw=2)
+    plot!(ρs, condnums_F, label=L"κ(F)", lw=2)
+    savefig("figs/" * probname * "_condnum.png")
+end
