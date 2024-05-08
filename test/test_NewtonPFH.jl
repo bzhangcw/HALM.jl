@@ -33,6 +33,7 @@ end
 
 ε = 1e-3
 ε_CG = 1e-7
+μ₀ = 5e-2
 opt_ls = backtrack()
 opt_inner = NewtonCG()
 
@@ -56,7 +57,7 @@ if bool_opt
     Hv = similar(x)
     j = 0
     for k in 1:K
-        global x, y, ρ, ξ, d, θ, V, kₜ, j
+        global x, y, ρ, ξ, d, θ, V, kₜ, j, μ₀
         L(x) = loss(x) + y' * r(x) + ρ / 2 * (r(x)' * r(x))
         ϕ(x) = grad(x) + A' * (y + ρ * r(x))
         # hvp₊(x, v) = hvp(x, v) + ρ * A' * (A * v)
@@ -67,7 +68,7 @@ if bool_opt
         _p = _r' * _r
 
         @printf(
-            "---- k:%3d, j:%3d, ρ:%.1e, |r|²:%.1e, f:%.2f\n",
+            "---- k:%3d, j:%3d, ρ:%.1e, |r|²:%.1e, f:%.5e\n",
             k, j, ρ, _p, _f
         )
 
@@ -77,7 +78,7 @@ if bool_opt
         rh = PFH(name=Symbol("PF-HSODM"))(;
             x0=copy(x), f=L, g=ϕ, hvp=hvp₊,
             maxiter=10, tol=ε, freq=1,
-            step=:hsodm, μ₀=5e-2,
+            step=:hsodm, μ₀=μ₀,
             bool_trace=true,
             verbose=0,
             direction=:warm,
@@ -95,17 +96,25 @@ if bool_opt
             push!(condnums_F, cond_F)
         end
 
-        j += rh.state.kₜ
+        j += rh.state.k₂
         x = rh.state.x
         push!(r_hist, r(x))
         push!(loss_hist, loss(x))
         push!(cgtimes_hist, cgtimes_k)
         if (norm(kkt(x, y)) < 1e-3)
+            @printf(
+                "---- k:%3s, j:%3d, ρ:%.1e, |r|²:%.1e, f:%.5e\n",
+                "*", j, ρ, _p, _f
+            )
             @info "terminated by residual"
             break
         end
         y += ρ * r(x)
-        (norm(r(x)) > ε) && (ρ *= 2)
+        (norm(r(x)) > ε) && begin
+            (ρ *= 2)
+            (μ₀ /= 10)
+        end
+
     end
 end
 
