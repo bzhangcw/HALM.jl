@@ -17,9 +17,9 @@ Random.seed!(123)
 
 # Set up the problem dimensions and parameters
 T = Float64
-n = 50
-m = 400
-d = 80      # number constraints
+n = 1500
+m = 600
+d = 180      # number constraints
 μ = 1e-6    # regularization parameter
 
 # objective pieces

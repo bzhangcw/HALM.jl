@@ -95,7 +95,7 @@ if bool_opt
             push!(condnums_F, cond_F)
         end
 
-        j += rh.state.kᵤ
+        j += rh.state.kₜ
         x = rh.state.x
         push!(r_hist, r(x))
         push!(loss_hist, loss(x))
